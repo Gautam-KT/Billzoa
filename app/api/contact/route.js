@@ -1,7 +1,7 @@
 export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { validateInquiry } from "@/lib/validate";
-import { supabase } from "@/lib/supabase";
+import { getSupabase } from "@/lib/supabase";
 import nodemailer from "nodemailer";
 
 const transporter =
@@ -51,7 +51,8 @@ export async function POST(request) {
 
   // 1. Insert lead directly into Supabase
   try {
-    const { error: dbError } = await supabase.from("inquiries").insert([
+   const supabase = getSupabase();
+const { error: dbError } = await supabase.from("inquiries").insert([
       {
         name: values.name,
         company: values.company || null,
