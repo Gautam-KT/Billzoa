@@ -6,7 +6,7 @@ import Logo from "./Logo";
 import ThemeToggle from "./ThemeToggle";
 import { navigation, headerCta } from "@/data/navigation";
 
-const isActive = (pathname, href) => pathname === href || pathname.startsWith(href + "/");
+const isActive = (pathname, href) => pathname === href || pathname?.startsWith(href + "/");
 
 export default function Header() {
   const pathname = usePathname();
@@ -35,38 +35,43 @@ export default function Header() {
     };
   }, [open]);
 
+  // Hide the entire public header on admin pages
+  if (pathname?.startsWith("/admin")) {
+    return null;
+  }
+
   return (
     <header className={`header ${scrolled ? "is-scrolled" : ""} ${open ? "is-open" : ""}`}>
       <div className="header__inner container">
         <Logo />
         <div className="header__end">
-        <nav className="header__nav" aria-label="Primary">
-          {navigation.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className="nav-link"
-              aria-current={isActive(pathname, item.href) ? "page" : undefined}
-              data-cursor="link"
-            >
-              {item.label}
+          <nav className="header__nav" aria-label="Primary">
+            {navigation.map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                className="nav-link"
+                aria-current={isActive(pathname, item.href) ? "page" : undefined}
+                data-cursor="link"
+              >
+                {item.label}
+              </Link>
+            ))}
+            <Link href={headerCta.href} className="btn btn--small" data-cursor="open">
+              {headerCta.label} <span aria-hidden="true">↗</span>
             </Link>
-          ))}
-          <Link href={headerCta.href} className="btn btn--small" data-cursor="open">
-            {headerCta.label} <span aria-hidden="true">↗</span>
-          </Link>
-        </nav>
-        <ThemeToggle />
-        <button
-          type="button"
-          className="menu-btn"
-          aria-expanded={open}
-          aria-controls="mobile-menu"
-          onClick={() => setOpen((v) => !v)}
-        >
-          <span className="menu-btn__label">{open ? "Close" : "Menu"}</span>
-          <span className="menu-btn__bars" aria-hidden="true"><i /><i /></span>
-        </button>
+          </nav>
+          <ThemeToggle />
+          <button
+            type="button"
+            className="menu-btn"
+            aria-expanded={open}
+            aria-controls="mobile-menu"
+            onClick={() => setOpen((v) => !v)}
+          >
+            <span className="menu-btn__label">{open ? "Close" : "Menu"}</span>
+            <span className="menu-btn__bars" aria-hidden="true"><i /><i /></span>
+          </button>
         </div>
       </div>
 
