@@ -18,13 +18,25 @@ export default function AdminDashboard() {
   const [status, setStatus] = useState("new");
   const [saveStatus, setSaveStatus] = useState("");
 
+  // Controlled Meeting Time & Action State
+  const [meetingTime, setMeetingTime] = useState("");
+  const [zoomLoading, setZoomLoading] = useState(false);
+
   const fetchInquiries = async () => {
     try {
       const res = await fetch("/api/admin/inquiries");
       if (res.ok) {
         const data = await res.json();
-        setInquiries(data.inquiries || []);
+        const list = data.inquiries || [];
+        setInquiries(list);
         setAuthorized(true);
+
+        // Keep selected inquiry synced with latest data
+        if (selectedInquiry) {
+          const targetId = selectedInquiry._id || selectedInquiry.id;
+          const fresh = list.find((i) => (i._id || i.id) === targetId);
+          if (fresh) setSelectedInquiry(fresh);
+        }
       } else {
         setAuthorized(false);
       }
@@ -68,6 +80,7 @@ export default function AdminDashboard() {
     setOfferAmount(inq.offer_amount || "");
     setOfferDetails(inq.offer_details || "");
     setAdminNotes(inq.admin_notes || "");
+    setMeetingTime(inq.zoom_meeting?.scheduled_time ? inq.zoom_meeting.scheduled_time.slice(0, 16) : "");
     setSaveStatus("");
   };
 
@@ -75,11 +88,14 @@ export default function AdminDashboard() {
     if (!selectedInquiry) return;
     setSaveStatus("Saving...");
 
+    const targetId = selectedInquiry._id || selectedInquiry.id;
+
     const res = await fetch("/api/admin/inquiries", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        id: selectedInquiry.id,
+        id: targetId,
+        _id: targetId,
         status,
         offer_amount: offerAmount,
         offer_details: offerDetails,
@@ -93,6 +109,48 @@ export default function AdminDashboard() {
       setTimeout(() => setSaveStatus(""), 2000);
     } else {
       setSaveStatus("Failed to update.");
+    }
+  };
+
+  const handleScheduleZoom = async () => {
+    if (!selectedInquiry) return;
+    if (!meetingTime) return alert("Please pick a date and time first.");
+
+    setZoomLoading(true);
+    try {
+      const res = await fetch("/api/admin/schedule-zoom", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          inquiryId: selectedInquiry._id || selectedInquiry.id,
+          clientEmail: selectedInquiry.email,
+          clientName: selectedInquiry.name,
+          projectType: selectedInquiry.project_type,
+          startTime: meetingTime,
+        }),
+      });
+
+      // Safely parse text first to prevent "Unexpected end of JSON" crashes
+      const text = await res.text();
+      let data = {};
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        throw new Error(`Server returned non-JSON response (${res.status}): ${text || "Empty body"}`);
+      }
+
+      if (!res.ok) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+
+      alert(`Zoom Meeting Scheduled!\n\nJoin URL: ${data.meeting.joinUrl}`);
+      setStatus("scheduled");
+      await fetchInquiries();
+    } catch (err) {
+      console.error("[schedule-zoom error]:", err);
+      alert(`Error scheduling meeting: ${err.message}`);
+    } finally {
+      setZoomLoading(false);
     }
   };
 
@@ -111,7 +169,7 @@ export default function AdminDashboard() {
         <form onSubmit={handleLogin} style={{ background: "#121212", border: "1px solid #222", padding: "36px", borderRadius: "12px", width: "100%", maxWidth: "380px" }}>
           <h2 style={{ color: "#fff", marginBottom: "8px", fontSize: "1.4rem" }}>Billzoa Admin</h2>
           <p style={{ color: "#777", fontSize: "0.88rem", marginBottom: "20px" }}>Enter root passkey to access client requirements.</p>
-          
+
           <input
             type="password"
             placeholder="Passkey"
@@ -142,21 +200,26 @@ export default function AdminDashboard() {
   return (
     <div style={{ minHeight: "100vh", background: "#0a0a0a", color: "#ddd", display: "flex", flexDirection: "column" }}>
       {/* Top Navbar */}
-      <div style={{ display: "flex", justifyContent: "flex-end", padding: "12px 24px", borderBottom: "1px solid #1f1f1f" }}>
-  <button
-    onClick={handleLogout}
-    style={{ background: "transparent", border: "1px solid #333", color: "#888", fontSize: "0.78rem", padding: "4px 10px", borderRadius: "4px", cursor: "pointer" }}
-  >
-    Lock Session
-  </button>
-</div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 28px", borderBottom: "1px solid #1f1f1f", background: "#0c0c0c" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <span style={{ fontWeight: 800, color: "#fff", fontSize: "1rem", letterSpacing: "0.5px" }}>Billzoa</span>
+          <span style={{ background: "#1f1f1f", color: "#888", fontSize: "0.72rem", padding: "2px 8px", borderRadius: "4px" }}>Admin Panel</span>
+        </div>
+        <button
+          onClick={handleLogout}
+          style={{ background: "transparent", border: "1px solid #333", color: "#888", fontSize: "0.78rem", padding: "6px 12px", borderRadius: "4px", cursor: "pointer" }}
+        >
+          Lock Session
+        </button>
+      </div>
+
       {/* Main Container */}
       <div style={{ display: "grid", gridTemplateColumns: "360px 1fr", flex: 1 }}>
         {/* Left Side: Requirements & Inquiries List */}
         <aside style={{ borderRight: "1px solid #222", overflowY: "auto", height: "calc(100vh - 65px)" }}>
           {/* Status Tabs */}
           <div style={{ display: "flex", borderBottom: "1px solid #222", background: "#0f0f0f" }}>
-            {["all", "new", "replied", "offered"].map((tab) => (
+            {["all", "new", "scheduled", "replied", "offered"].map((tab) => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -167,7 +230,7 @@ export default function AdminDashboard() {
                   color: activeTab === tab ? "#fff" : "#777",
                   border: "none",
                   cursor: "pointer",
-                  fontSize: "0.8rem",
+                  fontSize: "0.75rem",
                   textTransform: "capitalize",
                 }}
               >
@@ -180,34 +243,56 @@ export default function AdminDashboard() {
             {filtered.length === 0 ? (
               <p style={{ padding: "24px", color: "#666", textAlign: "center", fontSize: "0.85rem" }}>No inquiries found.</p>
             ) : (
-              filtered.map((inq) => (
-                <div
-                  key={inq.id}
-                  onClick={() => selectLead(inq)}
-                  style={{
-                    padding: "16px",
-                    borderBottom: "1px solid #1a1a1a",
-                    cursor: "pointer",
-                    background: selectedInquiry?.id === inq.id ? "#161616" : "transparent",
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
-                    <span style={{ color: "#fff", fontWeight: 600 }}>{inq.name}</span>
-                    <span style={{ fontSize: "0.75rem", color: "#666" }}>
-                      {new Date(inq.created_at).toLocaleDateString()}
-                    </span>
+              filtered.map((inq) => {
+                const docId = inq._id || inq.id;
+                const isSelected = (selectedInquiry?._id || selectedInquiry?.id) === docId;
+                return (
+                  <div
+                    key={docId}
+                    onClick={() => selectLead(inq)}
+                    style={{
+                      padding: "16px",
+                      borderBottom: "1px solid #1a1a1a",
+                      cursor: "pointer",
+                      background: isSelected ? "#161616" : "transparent",
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
+                      <span style={{ color: "#fff", fontWeight: 600 }}>{inq.name}</span>
+                      <span style={{ fontSize: "0.75rem", color: "#666" }}>
+                        {new Date(inq.createdAt || inq.created_at || Date.now()).toLocaleDateString()}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: "0.82rem", color: "#888", marginBottom: "6px" }}>{inq.company || inq.email}</div>
+                    <div style={{ display: "flex", gap: "6px" }}>
+                      <span style={{ background: "#222", padding: "2px 6px", borderRadius: "4px", fontSize: "0.72rem", color: "#aaa" }}>
+                        {inq.project_type}
+                      </span>
+                      <span
+                        style={{
+                          background:
+                            inq.status === "new"
+                              ? "#311818"
+                              : inq.status === "scheduled"
+                              ? "#142838"
+                              : "#1a2c1b",
+                          color:
+                            inq.status === "new"
+                              ? "#ff7c7c"
+                              : inq.status === "scheduled"
+                              ? "#60a5fa"
+                              : "#71d683",
+                          padding: "2px 6px",
+                          borderRadius: "4px",
+                          fontSize: "0.72rem",
+                        }}
+                      >
+                        {inq.status || "new"}
+                      </span>
+                    </div>
                   </div>
-                  <div style={{ fontSize: "0.82rem", color: "#888", marginBottom: "6px" }}>{inq.company || inq.email}</div>
-                  <div style={{ display: "flex", gap: "6px" }}>
-                    <span style={{ background: "#222", padding: "2px 6px", borderRadius: "4px", fontSize: "0.72rem", color: "#aaa" }}>
-                      {inq.project_type}
-                    </span>
-                    <span style={{ background: inq.status === "new" ? "#311818" : "#1a2c1b", color: inq.status === "new" ? "#ff7c7c" : "#71d683", padding: "2px 6px", borderRadius: "4px", fontSize: "0.72rem" }}>
-                      {inq.status || "new"}
-                    </span>
-                  </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         </aside>
@@ -243,49 +328,54 @@ export default function AdminDashboard() {
                   </div>
                 </div>
               </div>
-              {/* Inside the selectedInquiry view in app/admin/page.js */}
-<div style={{ background: "#121212", border: "1px solid #222", borderRadius: "8px", padding: "20px", marginBottom: "24px" }}>
-  <h3 style={{ color: "#aaa", fontSize: "0.85rem", textTransform: "uppercase", letterSpacing: "1px", marginBottom: "14px" }}>
-    Schedule Zoom Discovery Call
-  </h3>
-  
-  <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
-    <input
-      type="datetime-local"
-      id="meetingTime"
-      style={{ padding: "8px 12px", background: "#181818", border: "1px solid #333", color: "#fff", borderRadius: "6px" }}
-    />
-    <button
-      onClick={async () => {
-        const timeVal = document.getElementById("meetingTime").value;
-        if (!timeVal) return alert("Select a date and time first");
 
-        const res = await fetch("/api/admin/schedule-zoom", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            inquiryId: selectedInquiry.id,
-            clientEmail: selectedInquiry.email,
-            clientName: selectedInquiry.name,
-            projectType: selectedInquiry.project_type,
-            startTime: timeVal,
-          }),
-        });
+              {/* Schedule Zoom Discovery Call */}
+              <div style={{ background: "#121212", border: "1px solid #222", borderRadius: "8px", padding: "20px", marginBottom: "24px" }}>
+                <h3 style={{ color: "#aaa", fontSize: "0.85rem", textTransform: "uppercase", letterSpacing: "1px", marginBottom: "14px" }}>
+                  Schedule Zoom Discovery Call
+                </h3>
 
-        const data = await res.json();
-        if (res.ok) {
-          alert(`Zoom Meeting Created: ${data.meeting.joinUrl}`);
-          fetchInquiries();
-        } else {
-          alert(`Error: ${data.error}`);
-        }
-      }}
-      style={{ background: "#2563eb", color: "#fff", border: "none", padding: "10px 18px", borderRadius: "6px", fontWeight: 600, cursor: "pointer" }}
-    >
-      Create Zoom Link & Email Client
-    </button>
-  </div>
-</div>
+                {selectedInquiry.zoom_meeting?.join_url && (
+                  <div style={{ background: "#0b2038", border: "1px solid #1e3a8a", padding: "12px", borderRadius: "6px", marginBottom: "16px" }}>
+                    <div style={{ color: "#93c5fd", fontWeight: 600, fontSize: "0.85rem", marginBottom: "4px" }}>Active Meeting Scheduled</div>
+                    <div style={{ fontSize: "0.82rem", color: "#cbd5e1" }}>
+                      <strong>Join:</strong>{" "}
+                      <a href={selectedInquiry.zoom_meeting.join_url} target="_blank" rel="noreferrer" style={{ color: "#60a5fa" }}>
+                        {selectedInquiry.zoom_meeting.join_url}
+                      </a>
+                    </div>
+                    {selectedInquiry.zoom_meeting.password && (
+                      <div style={{ fontSize: "0.78rem", color: "#94a3b8", marginTop: "2px" }}>
+                        Passcode: {selectedInquiry.zoom_meeting.password}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                  <input
+                    type="datetime-local"
+                    value={meetingTime}
+                    onChange={(e) => setMeetingTime(e.target.value)}
+                    style={{ padding: "8px 12px", background: "#181818", border: "1px solid #333", color: "#fff", borderRadius: "6px" }}
+                  />
+                  <button
+                    onClick={handleScheduleZoom}
+                    disabled={zoomLoading}
+                    style={{
+                      background: zoomLoading ? "#1d4ed8" : "#2563eb",
+                      color: "#fff",
+                      border: "none",
+                      padding: "10px 18px",
+                      borderRadius: "6px",
+                      fontWeight: 600,
+                      cursor: zoomLoading ? "wait" : "pointer",
+                    }}
+                  >
+                    {zoomLoading ? "Scheduling..." : "Create Zoom Link & Email Client"}
+                  </button>
+                </div>
+              </div>
 
               {/* Offer & Negotiation Builder */}
               <div style={{ background: "#121212", border: "1px solid #222", borderRadius: "8px", padding: "20px", marginBottom: "24px" }}>
@@ -300,9 +390,9 @@ export default function AdminDashboard() {
                       style={{ width: "100%", padding: "10px", background: "#181818", border: "1px solid #333", color: "#fff", borderRadius: "6px" }}
                     >
                       <option value="new">New</option>
+                      <option value="scheduled">Scheduled</option>
                       <option value="replied">Replied</option>
                       <option value="offered">Offer Sent</option>
-                      <option value="closed">Closed / Won</option>
                       <option value="archived">Archived</option>
                     </select>
                   </div>
@@ -320,10 +410,10 @@ export default function AdminDashboard() {
                 </div>
 
                 <div style={{ marginBottom: "16px" }}>
-                  <label style={{ display: "block", color: "#888", fontSize: "0.8rem", marginBottom: "6px" }}>Offer Deliverables & Deliverable Timelines</label>
+                  <label style={{ display: "block", color: "#888", fontSize: "0.8rem", marginBottom: "6px" }}>Offer Deliverables & Timelines</label>
                   <textarea
                     rows={3}
-                    placeholder="e.g. Includes Next.js setup, Supabase authentication, and 2-week turnaround..."
+                    placeholder="e.g. Next.js architecture, MongoDB Atlas integration, 2-week turnaround..."
                     value={offerDetails}
                     onChange={(e) => setOfferDetails(e.target.value)}
                     style={{ width: "100%", padding: "10px", background: "#181818", border: "1px solid #333", color: "#fff", borderRadius: "6px", resize: "vertical" }}
