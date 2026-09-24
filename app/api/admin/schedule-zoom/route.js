@@ -1,9 +1,10 @@
+export const dynamic = "force-dynamic";
+
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
+import mongoose from "mongoose";
 import connectDB from "@/lib/mongodb";
 import Inquiry from "@/models/Inquiry";
-
-export const dynamic = "force-dynamic";
 
 async function isAuthenticated() {
   const cookieStore = await cookies();
@@ -17,17 +18,18 @@ export async function GET() {
 
   try {
     await connectDB();
-    // Return all inquiries sorted latest first, mapped with virtual id for backward compatibility
     const docs = await Inquiry.find({}).sort({ createdAt: -1 }).lean();
+    
     const inquiries = docs.map((doc) => ({
       ...doc,
       id: doc._id.toString(),
+      _id: doc._id.toString(),
     }));
 
     return NextResponse.json({ inquiries });
   } catch (error) {
     console.error("[mongodb] fetch inquiries error:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ error: error.message || "Failed to fetch inquiries" }, { status: 500 });
   }
 }
 
@@ -45,6 +47,10 @@ export async function PATCH(request) {
       return NextResponse.json({ error: "Missing inquiry ID" }, { status: 400 });
     }
 
+    if (!mongoose.Types.ObjectId.isValid(targetId)) {
+      return NextResponse.json({ error: "Invalid inquiry ID format" }, { status: 400 });
+    }
+
     await connectDB();
 
     const updateFields = {};
@@ -56,7 +62,7 @@ export async function PATCH(request) {
     const updated = await Inquiry.findByIdAndUpdate(
       targetId,
       { $set: updateFields },
-      { new: true }
+      { new: true, runValidators: true }
     ).lean();
 
     if (!updated) {
@@ -67,10 +73,38 @@ export async function PATCH(request) {
       inquiry: {
         ...updated,
         id: updated._id.toString(),
+        _id: updated._id.toString(),
       },
     });
   } catch (error) {
     console.error("[mongodb] update inquiry error:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ error: error.message || "Failed to update inquiry" }, { status: 500 });
+  }
+}
+
+export async function DELETE(request) {
+  if (!(await isAuthenticated())) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  try {
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get("id");
+
+    if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+      return NextResponse.json({ error: "Invalid or missing inquiry ID" }, { status: 400 });
+    }
+
+    await connectDB();
+    const deleted = await Inquiry.findByIdAndDelete(id);
+
+    if (!deleted) {
+      return NextResponse.json({ error: "Inquiry not found" }, { status: 404 });
+    }
+
+    return NextResponse.json({ ok: true, message: "Inquiry deleted successfully" });
+  } catch (error) {
+    console.error("[mongodb] delete inquiry error:", error);
+    return NextResponse.json({ error: error.message || "Failed to delete inquiry" }, { status: 500 });
   }
 }
