@@ -1,7 +1,8 @@
 export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { validateInquiry } from "@/lib/validate";
-import { getSupabase } from "@/lib/supabase";
+import connectDB from "@/lib/mongodb";
+import Inquiry from "@/models/Inquiry";
 import nodemailer from "nodemailer";
 
 const transporter =
@@ -15,7 +16,7 @@ const transporter =
       })
     : null;
 
-// Simple in-memory limiter (per server instance). Replace with a shared store if you scale out.
+// Simple in-memory limiter (per server instance).
 const hits = new Map();
 const limited = (ip) => {
   const now = Date.now();
@@ -41,7 +42,7 @@ export async function POST(request) {
     return NextResponse.json({ error: "The request was malformed." }, { status: 400 });
   }
 
-  // Honeypot filled → pretend success, drop it.
+  // Honeypot check
   if (body?.website) return NextResponse.json({ ok: true });
 
   const { values, errors, valid } = validateInquiry(body || {});
@@ -49,31 +50,22 @@ export async function POST(request) {
     return NextResponse.json({ error: "Some fields need attention.", errors }, { status: 422 });
   }
 
-  // 1. Insert lead directly into Supabase
+  // 1. Insert lead into MongoDB
   try {
-   const supabase = getSupabase();
-const { error: dbError } = await supabase.from("inquiries").insert([
-      {
-        name: values.name,
-        company: values.company || null,
-        email: values.email,
-        project_type: values.projectType,
-        budget: values.budget || null,
-        message: values.message,
-      },
-    ]);
-
-    if (dbError) {
-      console.error("[supabase] insert error:", dbError.message);
-      return NextResponse.json(
-        { error: "Could not save your inquiry right now. Please try again later." },
-        { status: 500 }
-      );
-    }
+    await connectDB();
+    await Inquiry.create({
+      name: values.name,
+      company: values.company || null,
+      email: values.email,
+      project_type: values.projectType,
+      budget: values.budget || null,
+      message: values.message,
+      status: "new",
+    });
   } catch (err) {
-    console.error("[supabase] unexpected connection error:", err);
+    console.error("[mongodb] insert error:", err);
     return NextResponse.json(
-      { error: "Database service unavailable." },
+      { error: `Database service unavailable: ${err.message}` },
       { status: 500 }
     );
   }
@@ -107,7 +99,7 @@ const { error: dbError } = await supabase.from("inquiries").insert([
     }
   }
 
-  // 3. Optional: Forward to external webhook if configured
+  // 3. Optional webhook
   const webhook = process.env.CONTACT_WEBHOOK_URL;
   if (webhook) {
     try {

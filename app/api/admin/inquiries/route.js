@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { getSupabase } from "@/lib/supabase";
+import connectDB from "@/lib/mongodb";
+import Inquiry from "@/models/Inquiry";
 
 export const dynamic = "force-dynamic";
 
@@ -14,17 +15,20 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const supabase = getSupabase();
-  const { data, error } = await supabase
-    .from("inquiries")
-    .select("*")
-    .order("created_at", { ascending: false });
+  try {
+    await connectDB();
+    // Return all inquiries sorted latest first, mapped with virtual id for backward compatibility
+    const docs = await Inquiry.find({}).sort({ createdAt: -1 }).lean();
+    const inquiries = docs.map((doc) => ({
+      ...doc,
+      id: doc._id.toString(),
+    }));
 
-  if (error) {
+    return NextResponse.json({ inquiries });
+  } catch (error) {
+    console.error("[mongodb] fetch inquiries error:", error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
-
-  return NextResponse.json({ inquiries: data });
 }
 
 export async function PATCH(request) {
@@ -32,24 +36,41 @@ export async function PATCH(request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const body = await request.json();
-  const { id, status, admin_notes, offer_amount, offer_details } = body;
+  try {
+    const body = await request.json();
+    const { id, _id, status, admin_notes, offer_amount, offer_details } = body;
+    const targetId = _id || id;
 
-  if (!id) {
-    return NextResponse.json({ error: "Missing inquiry ID" }, { status: 400 });
-  }
+    if (!targetId) {
+      return NextResponse.json({ error: "Missing inquiry ID" }, { status: 400 });
+    }
 
-  const supabase = getSupabase();
-  const { data, error } = await supabase
-    .from("inquiries")
-    .update({ status, admin_notes, offer_amount, offer_details })
-    .eq("id", id)
-    .select()
-    .single();
+    await connectDB();
 
-  if (error) {
+    const updateFields = {};
+    if (status !== undefined) updateFields.status = status;
+    if (admin_notes !== undefined) updateFields.admin_notes = admin_notes;
+    if (offer_amount !== undefined) updateFields.offer_amount = offer_amount;
+    if (offer_details !== undefined) updateFields.offer_details = offer_details;
+
+    const updated = await Inquiry.findByIdAndUpdate(
+      targetId,
+      { $set: updateFields },
+      { new: true }
+    ).lean();
+
+    if (!updated) {
+      return NextResponse.json({ error: "Inquiry not found" }, { status: 404 });
+    }
+
+    return NextResponse.json({
+      inquiry: {
+        ...updated,
+        id: updated._id.toString(),
+      },
+    });
+  } catch (error) {
+    console.error("[mongodb] update inquiry error:", error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
-
-  return NextResponse.json({ inquiry: data });
 }

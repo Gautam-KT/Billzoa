@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { getSupabase } from "@/lib/supabase";
-import { createZoomMeeting } from "@/lib/zoom";
-import nodemailer from "nodemailer";
+import connectDB from "@/lib/mongodb";
+import Inquiry from "@/models/Inquiry";
 
 export const dynamic = "force-dynamic";
 
@@ -11,71 +10,67 @@ async function isAuthenticated() {
   return cookieStore.get("billzoa_admin")?.value === "authenticated";
 }
 
-export async function POST(request) {
+export async function GET() {
   if (!(await isAuthenticated())) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   try {
-    const { inquiryId, clientEmail, clientName, projectType, startTime } =
-      await request.json();
+    await connectDB();
+    // Return all inquiries sorted latest first, mapped with virtual id for backward compatibility
+    const docs = await Inquiry.find({}).sort({ createdAt: -1 }).lean();
+    const inquiries = docs.map((doc) => ({
+      ...doc,
+      id: doc._id.toString(),
+    }));
 
-    if (!inquiryId || !startTime) {
-      return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+    return NextResponse.json({ inquiries });
+  } catch (error) {
+    console.error("[mongodb] fetch inquiries error:", error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
+
+export async function PATCH(request) {
+  if (!(await isAuthenticated())) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  try {
+    const body = await request.json();
+    const { id, _id, status, admin_notes, offer_amount, offer_details } = body;
+    const targetId = _id || id;
+
+    if (!targetId) {
+      return NextResponse.json({ error: "Missing inquiry ID" }, { status: 400 });
     }
 
-    // 1. Create the Zoom Meeting
-    const meeting = await createZoomMeeting({
-      topic: `Billzoa x ${clientName}: ${projectType}`,
-      startTime: new Date(startTime).toISOString(),
-      duration: 30,
+    await connectDB();
+
+    const updateFields = {};
+    if (status !== undefined) updateFields.status = status;
+    if (admin_notes !== undefined) updateFields.admin_notes = admin_notes;
+    if (offer_amount !== undefined) updateFields.offer_amount = offer_amount;
+    if (offer_details !== undefined) updateFields.offer_details = offer_details;
+
+    const updated = await Inquiry.findByIdAndUpdate(
+      targetId,
+      { $set: updateFields },
+      { new: true }
+    ).lean();
+
+    if (!updated) {
+      return NextResponse.json({ error: "Inquiry not found" }, { status: 404 });
+    }
+
+    return NextResponse.json({
+      inquiry: {
+        ...updated,
+        id: updated._id.toString(),
+      },
     });
-
-    const supabase = getSupabase();
-
-    // 2. Save meeting details into Supabase
-    await supabase
-      .from("inquiries")
-      .update({
-        status: "scheduled",
-        offer_details: `Zoom Scheduled: ${meeting.joinUrl}`,
-      })
-      .eq("id", inquiryId);
-
-    // 3. Email client the meeting link
-    if (process.env.GMAIL_USER && process.env.GMAIL_PASS && clientEmail) {
-      const transporter = nodemailer.createTransport({
-        service: "gmail",
-        auth: {
-          user: process.env.GMAIL_USER,
-          pass: process.env.GMAIL_PASS,
-        },
-      });
-
-      await transporter.sendMail({
-        from: `"Billzoa" <${process.env.GMAIL_USER}>`,
-        to: clientEmail,
-        subject: `Discovery Call: Billzoa x ${clientName}`,
-        html: `
-          <div style="font-family: sans-serif; line-height: 1.5; color: #222; max-width: 560px;">
-            <h2>Project Discovery Meeting</h2>
-            <p>Hi ${clientName},</p>
-            <p>A 30-minute discovery call has been scheduled to discuss your project (<strong>${projectType}</strong>).</p>
-            <p><strong>Time:</strong> ${new Date(startTime).toUTCString()}</p>
-            <p style="margin: 20px 0;">
-              <a href="${meeting.joinUrl}" style="background: #2563eb; color: #fff; padding: 10px 18px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block;">
-                Join Zoom Meeting
-              </a>
-            </p>
-            <p style="font-size: 0.85rem; color: #666;">Meeting ID: ${meeting.meetingId} | Passcode: ${meeting.password}</p>
-          </div>
-        `,
-      });
-    }
-
-    return NextResponse.json({ ok: true, meeting });
-  } catch (err) {
-    console.error("[zoom error]:", err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+  } catch (error) {
+    console.error("[mongodb] update inquiry error:", error);
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
